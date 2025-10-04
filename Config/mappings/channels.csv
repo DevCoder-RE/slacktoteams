@@ -1,0 +1,4 @@
+slack_channel_name,slack_channel_id,team_name,channel_name,visibility,notes
+general,C01,Slack Migration,General,standard,default mapping
+random,C02,Slack Migration,Random,standard,default mapping
+private-stuff,C03,Slack Migration,Private Stuff,private,manual mapping required

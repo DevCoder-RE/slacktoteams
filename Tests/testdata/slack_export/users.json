@@ -1,0 +1,7 @@
+﻿[
+  { "id":"U10001","name":"karl","profile":{"real_name":"Karl Example","email":"karl@example.test"} },
+  { "id":"U10002","name":"alexa","profile":{"real_name":"Alexa Rivera","email":"alexa@example.test"} },
+  { "id":"U10003","name":"mina","profile":{"real_name":"Mina Patel","email":"mina@example.test"} },
+  { "id":"U10004","name":"li","profile":{"real_name":"Li Chen","email":"li@example.test"} },
+  { "id":"U10005","name":"samir","profile":{"real_name":"Samir Qadir","email":"samir@example.test"} }
+]

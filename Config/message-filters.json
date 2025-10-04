@@ -1,0 +1,14 @@
+{
+  "excludeSystemMessages": true,
+  "excludeMessageTypes": ["channel_join", "channel_leave", "bot_message"],
+  "dateRange": {
+    "from": null,
+    "to": null
+  },
+  "textFilters": [
+    {
+      "pattern": "(?i)confidential",
+      "action": "exclude"
+    }
+  ]
+}

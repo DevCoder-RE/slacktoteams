@@ -1,0 +1,5 @@
+﻿[
+  { "id":"C10001","name":"engineering","created":1672617600,"is_archived":false,"topic":"Build & ship","purpose":"Engineering discussions" },
+  { "id":"C10002","name":"hr","created":1675209600,"is_archived":false,"topic":"People ops","purpose":"HR policies and Q&A" },
+  { "id":"C10003","name":"product-archived","created":1640908800,"is_archived":true,"topic":"","purpose":"Old product work" }
+]

@@ -1,0 +1,5 @@
+﻿[
+  { "type":"message","user":"U10004","text":"HR handbook v3 attached.","ts":"1736035200.000010",
+    "files":[ { "id":"F50004","name":"handbook.pdf","mimetype":"application/pdf","size":131072,"url_private":"sandbox://file_payloads/handbook.pdf" } ] },
+  { "type":"message","user":"U10002","text":"Please ignore this test channel message.","ts":"1736042400.000011" }
+]

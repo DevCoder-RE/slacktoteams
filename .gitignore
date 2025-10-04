@@ -1,0 +1,26 @@
+# PowerShell
+*.psd1
+*.psm1
+*.ps1xml
+
+# Logs and outputs
+Logs/
+Output/
+Reports/
+
+# Config and secrets
+Config/.env
+Config/appsettings.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.tmp
+
+# Archives
+*.zip
+*.7z
+*.tar

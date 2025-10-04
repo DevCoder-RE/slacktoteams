@@ -1,0 +1,6 @@
+﻿[
+  { "type":"message","user":"U10005","text":"Q2 forecast (internal only).","ts":"1681267200.000020",
+    "files":[ { "id":"F50005","name":"small-note.txt","mimetype":"text/plain","size":0,"url_private":"sandbox://file_payloads/small-note.txt" } ] },
+  { "type":"message","user":"U10003","text":"Duplicate file name test.","ts":"1681270800.000021",
+    "files":[ { "id":"F50006","name":"release-notes.pdf","mimetype":"application/pdf","size":131072,"url_private":"sandbox://file_payloads/release-notes.pdf" } ] }
+]
