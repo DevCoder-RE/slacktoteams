@@ -38,11 +38,15 @@ foreach ($u in $users) {
     if ($found) { $resolved = $found.userPrincipalName; $method = 'graph' }
   }
 
+  $slackRole = if ($u.is_owner) { 'owner' } elseif ($u.is_admin) { 'owner' } else { 'member' }
+  $teamsRole = $slackRole  # Direct mapping for simplicity
   $mapOut += [pscustomobject]@{
     slack_user_id = $slackId
     slack_display_name = $display
     slack_email = $email
+    slack_role = $slackRole
     teams_upn = $resolved
+    teams_role = $teamsRole
     method = $method
   }
 }

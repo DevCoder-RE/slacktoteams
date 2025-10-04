@@ -5,6 +5,8 @@ A comprehensive, enterprise-ready PowerShell solution for migrating Slack worksp
 ## ✨ Key Features
 
 - **🔄 Full Migration Pipeline**: 9-phase process covering parsing, mapping, provisioning, posting, file handling, and validation
+- **🧵 Advanced Message Features**: Preserves Slack threading, rich text formatting, reactions, and emojis
+- **👥 Permission Mapping**: Maps Slack user roles (owners/admins) to Teams equivalents
 - **🎯 Targeted Migrations**: Filter by channels, users, or run incremental delta syncs
 - **⚡ Multiple Execution Modes**: Auto, ConfirmOnError, or ConfirmEachPhase for different operational needs
 - **📧 Email Notifications**: Automated alerts for phase completions and errors
@@ -20,7 +22,7 @@ A comprehensive, enterprise-ready PowerShell solution for migrating Slack worksp
 | 1 | `Phase1-ParseSlack.ps1` | Parse Slack export JSON files and normalize data |
 | 2 | `Phase2-MapUsers.ps1` | Map Slack users to Microsoft 365 accounts |
 | 3 | `Phase3-ProvisionTeams.ps1` | Create Teams team and channels |
-| 4 | `Phase4-PostMessages.ps1` | Post messages with proper timestamps and threading |
+| 4 | `Phase4-PostMessages.ps1` | Post messages with threading, reactions, and rich formatting |
 | 5 | `Phase5-DownloadFiles.ps1` | Download files from Slack (API or local) |
 | 6 | `Phase6-UploadFiles.ps1` | Upload files to Teams channels |
 | 7 | `Phase7-VerifyMigration.ps1` | Validate migration success and generate reports |

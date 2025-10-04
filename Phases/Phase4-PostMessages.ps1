@@ -57,45 +57,99 @@ foreach ($file in $parsedFiles) {
             }
         }
     }
-    $postedCount = 0
-    $batchSize = [int](Get-Config 'Graph.BatchSize' 20)
-    $messageBatches = @()
-    $currentBatch = @()
 
+    # Sort messages by timestamp for threading
+    $messages = $messages | Sort-Object { [DateTime]::Parse($_.timestamp) }
+
+    # Group messages by thread
+    $threads = @{}
+    $rootMessages = @()
     foreach ($m in $messages) {
-        $content = "<p><b>$($m.author)</b> ($($m.timestamp))</p>$($m.text_html)"
-        $currentBatch += @{ Content = $content }
-        if ($currentBatch.Count -ge $batchSize) {
-            $messageBatches += ,$currentBatch
-            $currentBatch = @()
+        if ($m.thread_ts) {
+            if (-not $threads.ContainsKey($m.thread_ts)) {
+                $threads[$m.thread_ts] = @()
+            }
+            $threads[$m.thread_ts] += $m
+        } else {
+            $rootMessages += $m
         }
     }
-    if ($currentBatch.Count -gt 0) {
-        $messageBatches += ,$currentBatch
-    }
 
-    foreach ($batch in $messageBatches) {
+    $postedCount = 0
+    $messageIdMap = @{}  # Map slack ts to teams message id
+
+    # Post root messages first
+    foreach ($m in $rootMessages) {
+        $content = "<p><b>$($m.author)</b> ($($m.timestamp))</p>$($m.text_html)"
         if ($DryRun) {
-            Write-Log -Level Info -Message "DryRun: Would post batch of $($batch.Count) messages to '$channelName'" -Context "Phase4"
-            $postedCount += $batch.Count
+            Write-Log -Level Info -Message "DryRun: Would post root message to '$channelName'" -Context "Phase4"
+            $postedCount++
         } else {
             try {
-                $response = Send-BatchedChannelMessages -TeamId $provision.team.id -ChannelId $target.teams_channel_id -Messages $batch
-                $successful = ($response | Where-Object { $_.status -eq 201 }).Count
-                $postedCount += $successful
-                if ($successful -lt $batch.Count) {
-                    Write-Log -Level Warn -Message "Batch posting: $successful/$($batch.Count) messages succeeded for channel '$channelName'" -Context "Phase4"
+                $response = Post-ChannelMessage -TeamId $provision.team.id -ChannelId $target.teams_channel_id -Content $content
+                $messageIdMap[$m.raw.ts] = $response.id
+                $postedCount++
+                # Add reactions
+                if ($m.reactions) {
+                    foreach ($r in $m.reactions) {
+                        # Map Slack emoji to Teams reaction type (simplified)
+                        $reactionType = switch ($r.name) {
+                            'thumbsup' { 'like' }
+                            'heart' { 'heart' }
+                            default { 'like' }  # Default to like
+                        }
+                        try {
+                            Add-MessageReaction -TeamId $provision.team.id -ChannelId $target.teams_channel_id -MessageId $response.id -ReactionType $reactionType
+                        } catch {
+                            Write-Log -Level Warn -Message "Failed to add reaction to message: $($_.Exception.Message)" -Context "Phase4"
+                        }
+                    }
                 }
             } catch {
-                Write-Log -Level Error -Message "Batch posting failed for channel '$channelName': $($_.Exception.Message)" -Context "Phase4"
-                # Fallback to individual posting
-                foreach ($msg in $batch) {
-                    try {
-                        Post-ChannelMessage -TeamId $provision.team.id -ChannelId $target.teams_channel_id -Content $msg.Content
-                        $postedCount++
-                    } catch {
-                        Write-Log -Level Error -Message "Individual message posting failed: $($_.Exception.Message)" -Context "Phase4"
+                Write-Log -Level Error -Message "Root message posting failed: $($_.Exception.Message)" -Context "Phase4"
+            }
+        }
+    }
+
+    # Post thread replies
+    foreach ($threadTs in $threads.Keys) {
+        $replies = $threads[$threadTs] | Sort-Object { [DateTime]::Parse($_.timestamp) }
+        $parentId = $messageIdMap[$threadTs]
+        if (-not $parentId) {
+            Write-Log -Level Warn -Message "Parent message not found for thread $threadTs, posting as root" -Context "Phase4"
+            $parentId = $null
+        }
+        foreach ($m in $replies) {
+            $content = "<p><b>$($m.author)</b> ($($m.timestamp))</p>$($m.text_html)"
+            if ($DryRun) {
+                Write-Log -Level Info -Message "DryRun: Would post reply to '$channelName'" -Context "Phase4"
+                $postedCount++
+            } else {
+                try {
+                    if ($parentId) {
+                        $response = Reply-ChannelMessage -TeamId $provision.team.id -ChannelId $target.teams_channel_id -MessageId $parentId -Content $content
+                    } else {
+                        $response = Post-ChannelMessage -TeamId $provision.team.id -ChannelId $target.teams_channel_id -Content $content
                     }
+                    $messageIdMap[$m.raw.ts] = $response.id
+                    $postedCount++
+                    # Add reactions
+                    if ($m.reactions) {
+                        foreach ($r in $m.reactions) {
+                            $reactionType = switch ($r.name) {
+                                'thumbsup' { 'like' }
+                                'heart' { 'heart' }
+                                default { 'like' }
+                            }
+                            try {
+                                Add-MessageReaction -TeamId $provision.team.id -ChannelId $target.teams_channel_id -MessageId $response.id -ReactionType $reactionType
+                            } catch {
+                                Write-Log -Level Warn -Message "Failed to add reaction to reply: $($_.Exception.Message)" -Context "Phase4"
+                            }
+                        }
+                    }
+                } catch {
+                    Write-Log -Level Error -Message "Reply posting failed: $($_.Exception.Message)" -Context "Phase4"
                 }
             }
         }

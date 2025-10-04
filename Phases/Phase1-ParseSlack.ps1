@@ -84,15 +84,27 @@ function Process-MessageBatch {
         }
       }
     }
-    $processed += [pscustomobject]@{
-      channel = $ChannelName
-      author = $author
-      slack_user_id = $m.user
-      timestamp = $ts
-      text_html = $html
-      files = $files
-      raw = $m
+    $reactions = @()
+    if ($m.reactions) {
+      foreach ($r in $m.reactions) {
+        $reactions += [pscustomobject]@{
+          name = $r.name
+          count = $r.count
+          users = $r.users
+        }
+      }
     }
+    $processed += [pscustomobject]@{
+       channel = $ChannelName
+       author = $author
+       slack_user_id = $m.user
+       timestamp = $ts
+       text_html = $html
+       files = $files
+       thread_ts = $m.thread_ts
+       reactions = $reactions
+       raw = $m
+     }
     $count++
     $dt = [DateTime]::Parse($ts)
     if (-not $firstTs -or $dt -lt $firstTs) { $firstTs = $dt }

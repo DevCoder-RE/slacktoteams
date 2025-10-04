@@ -190,42 +190,242 @@ private-hr,HR,private
 
 ### Shared-Logging.ps1
 ```powershell
-Write-Log -Level <Info|Warn|Error|Fatal> -Message "string" [-Context "string"]
+Initialize-Logging -LogDirectory "string"
+Write-Log -Level <Trace|Debug|Info|Warn|Error> -Message "string" [-Context "string"]
 ```
 
 ### Shared-Config.ps1
 ```powershell
-Get-Config -Key "string" [-Default "string"]
-Load-AppConfig -AppSettingsPath "string" -EnvPath "string"
+Load-DotEnv -Path "string"
+Load-AppConfig [-AppSettingsPath "string"] [-EnvPath "string"]
+Get-Config -Key "string" [-Default <object>]
+Set-Config -Key "string" -Value <object>
+Save-Checkpoint -Phase "string" -State <hashtable> [-CheckpointDir "string"]
+Load-Checkpoint -Phase "string" [-CheckpointDir "string"]
+Resume-FromCheckpoint -Phase "string" -ResumeAction <scriptblock> [-CheckpointDir "string"]
 ```
 
 ### Shared-Json.ps1
 ```powershell
 Read-JsonFile -Path "string"
-Write-JsonFile -Path "string" -Object $object
+Write-JsonFile -Path "string" -Object <object>
 ```
 
 ### Shared-Retry.ps1
 ```powershell
-Invoke-WithRetry -ScriptBlock { ... } [-MaxRetries <number>] [-DelaySeconds <number>]
+Invoke-WithRetry -ScriptBlock <scriptblock> [-MaxAttempts <int>] [-InitialDelayMs <int>] [-BackoffFactor <double>] [-Context "string"] [-UseCircuitBreaker] [-CircuitBreakerThreshold <int>] [-CircuitBreakerTimeoutMs <int>]
+Get-RetryPolicy [-OperationType "string"]
+Invoke-WithRetryPolicy -ScriptBlock <scriptblock> [-OperationType "string"] [-Context "string"]
 ```
 
 ### Shared-Graph.ps1
 ```powershell
 Connect-Graph -TenantId "string" -ClientId "string" -ClientSecret "string"
-New-Team -DisplayName "string" -Description "string"
-New-TeamChannel -TeamId "string" -DisplayName "string" -MembershipType <standard|private>
+Get-GraphAuthHeader
+Update-RateLimitState -StatusCode <int> -Headers <hashtable>
+Get-RateLimitDelay
+Invoke-GraphRequest -Method <string> -Uri "string" [-Headers <hashtable>] [-Body <object>]
+Invoke-GraphBatchRequest -Requests <array>
+New-BatchedTeamChannels -TeamId "string" -ChannelNames <array> [-MembershipType "string"]
+Add-BatchedTeamMembers -TeamId "string" -UserIds <array> [-Role "string"]
+Send-BatchedChannelMessages -TeamId "string" -ChannelId "string" -Messages <array>
+Find-AadUserByEmail -Email "string"
+New-Team -DisplayName "string" [-Description "string"]
+New-TeamChannel -TeamId "string" -DisplayName "string" [-MembershipType "string"]
+Add-TeamMember -TeamId "string" -UserId "string" [-Role "string"]
 Post-ChannelMessage -TeamId "string" -ChannelId "string" -Content "string"
-Upload-FileToChannel -TeamId "string" -ChannelId "string" -FilePath "string"
+Reply-ChannelMessage -TeamId "string" -ChannelId "string" -MessageId "string" -Content "string"
+Add-MessageReaction -TeamId "string" -ChannelId "string" -MessageId "string" -ReactionType "string"
+Get-TeamDrive -TeamId "string"
+Upload-FileToChannel -TeamId "string" -ChannelId "string" -LocalPath "string" [-TargetFolder "string"]
 ```
 
 ### Shared-Slack.ps1
 ```powershell
+Get-SlackExportPath
 Get-SlackUsers
 Get-SlackChannels
 Get-SlackChannelMessageFiles
+Convert-SlackMarkdownToHtml -Text "string" [-EmojiMap <hashtable>]
+Invoke-SlackApi [-Method "string"] -Path "string" [-Body <hashtable>]
+Get-SlackFileById -FileId "string"
 Download-SlackFile -UrlPrivate "string" -OutFile "string"
-Convert-SlackMarkdownToHtml -Text "string" -EmojiMap $map
+```
+
+### Shared-Monitoring.ps1
+```powershell
+Initialize-Monitoring
+Update-PhaseProgress -PhaseName "string" [-Progress <int>] [-TotalItems <int>] [-ProcessedItems <int>]
+Complete-Phase -PhaseName "string"
+Record-ApiCall -Api <Slack|Graph> [-Success <bool>]
+Record-Error
+Record-Warning
+Get-MetricsSummary
+Send-WebhookNotification -Url "string" -Message "string" [-Level "string"]
+Send-AzureMonitorMetric -WorkspaceId "string" -SharedKey "string" -MetricName "string" -Value <double> [-Dimensions <hashtable>]
+```
+
+### Shared-Parallel.ps1
+```powershell
+Invoke-ParallelProcessing -Items <array> -ProcessScript <scriptblock> [-MaxThreads <int>] [-UseRunspacePool]
+Start-ChannelParallelProcessing -Channels <array> -ChannelScript <scriptblock> [-MaxConcurrentChannels <int>]
+Start-FileParallelProcessing -Files <array> -FileScript <scriptblock> [-MaxConcurrentFiles <int>]
+Start-ParallelFileDownload -FileDownloads <array> [-MaxConcurrentDownloads <int>] [-Mode "string"]
+Start-ParallelFileUpload -FileUploads <array> [-MaxConcurrentUploads <int>]
+Test-ParallelProcessingSupport
+```
+
+## Function Examples
+
+### Configuration Management
+```powershell
+# Load configuration
+Load-AppConfig -AppSettingsPath "Config/appsettings.json" -EnvPath "Config/.env"
+
+# Get configuration value
+$tenantId = Get-Config -Key "Graph.TenantId"
+
+# Set configuration value
+Set-Config -Key "Graph.ApiBaseUrl" -Value "https://graph.microsoft.com/v1.0"
+
+# Save checkpoint
+Save-Checkpoint -Phase "Phase1-ParseSlack" -State @{ ProcessedFiles = 100; LastFile = "channels.json" }
+
+# Load checkpoint
+$checkpoint = Load-Checkpoint -Phase "Phase1-ParseSlack"
+if ($checkpoint) {
+    Resume-FromCheckpoint -Phase "Phase1-ParseSlack" -ResumeAction {
+        param($state)
+        Write-Host "Resuming from $($state.LastFile)"
+    }
+}
+```
+
+### Logging
+```powershell
+# Initialize logging
+Initialize-Logging -LogDirectory "Logs"
+
+# Log messages
+Write-Log -Level Info -Message "Migration started" -Context "Main"
+Write-Log -Level Error -Message "API call failed" -Context "Graph"
+```
+
+### JSON Operations
+```powershell
+# Read JSON file
+$config = Read-JsonFile -Path "Config/appsettings.json"
+
+# Write JSON file
+$userMapping = @{
+    slack_id = "U123456"
+    email = "user@company.com"
+    display_name = "John Doe"
+}
+Write-JsonFile -Path "Output/user-mapping.json" -Object $userMapping
+```
+
+### Retry Logic
+```powershell
+# Simple retry
+$result = Invoke-WithRetry -ScriptBlock {
+    Invoke-WebRequest -Uri "https://api.example.com/data"
+} -MaxAttempts 3 -InitialDelayMs 1000
+
+# Retry with circuit breaker
+$result = Invoke-WithRetry -ScriptBlock {
+    Connect-Graph -TenantId $tenantId -ClientId $clientId -ClientSecret $secret
+} -UseCircuitBreaker -CircuitBreakerThreshold 5
+
+# Use predefined policy
+$result = Invoke-WithRetryPolicy -ScriptBlock {
+    Invoke-GraphRequest -Method GET -Uri "/teams"
+} -OperationType "api"
+```
+
+### Graph API Operations
+```powershell
+# Connect to Graph
+Connect-Graph -TenantId "12345678-1234-1234-1234-123456789012" -ClientId "client-id" -ClientSecret "secret"
+
+# Create team
+$team = New-Team -DisplayName "Slack Migration" -Description "Migrated from Slack"
+
+# Create channels in batch
+$channels = @("general", "random", "engineering")
+New-BatchedTeamChannels -TeamId $team.id -ChannelNames $channels
+
+# Post message
+Post-ChannelMessage -TeamId $team.id -ChannelId $channel.id -Content "<b>Hello World!</b>"
+
+# Upload file
+Upload-FileToChannel -TeamId $team.id -ChannelId $channel.id -LocalPath "C:\files\document.pdf"
+```
+
+### Slack API Operations
+```powershell
+# Get users and channels
+$users = Get-SlackUsers
+$channels = Get-SlackChannels
+
+# Get message files
+$messageFiles = Get-SlackChannelMessageFiles
+
+# Convert Slack markdown to HTML
+$emojiMap = @{
+    ":thumbsup:" = "👍"
+    ":smile:" = "😊"
+}
+$html = Convert-SlackMarkdownToHtml -Text "*Hello* :thumbsup:" -EmojiMap $emojiMap
+# Result: <b>Hello</b> 👍
+
+# Download file
+Download-SlackFile -UrlPrivate "https://files.slack.com/..." -OutFile "C:\downloads\file.pdf"
+```
+
+### Monitoring
+```powershell
+# Initialize monitoring
+Initialize-Monitoring
+
+# Update progress
+Update-PhaseProgress -PhaseName "Phase4-PostMessages" -Progress 75 -TotalItems 1000 -ProcessedItems 750
+
+# Record API calls
+Record-ApiCall -Api "Graph" -Success $true
+Record-ApiCall -Api "Slack" -Success $false
+
+# Record errors/warnings
+Record-Error
+Record-Warning
+
+# Get summary
+$summary = Get-MetricsSummary
+Write-Host "Total API calls: $($summary.TotalApiCalls)"
+
+# Send notifications
+Send-WebhookNotification -Url "https://hooks.slack.com/..." -Message "Migration completed" -Level "Info"
+```
+
+### Parallel Processing
+```powershell
+# Test parallel support
+$supported = Test-ParallelProcessingSupport
+
+# Parallel file downloads
+$downloads = @(
+    @{ UrlPrivate = "url1"; Dest = "file1.pdf" },
+    @{ UrlPrivate = "url2"; Dest = "file2.pdf" }
+)
+Start-ParallelFileDownload -FileDownloads $downloads -MaxConcurrentDownloads 3
+
+# Parallel channel processing
+$channels = Get-SlackChannels
+Start-ChannelParallelProcessing -Channels $channels -ChannelScript {
+    param($channel)
+    # Process channel
+    Write-Host "Processing $($channel.name)"
+} -MaxConcurrentChannels 3
 ```
 
 ## Exit Codes

@@ -272,6 +272,27 @@ function Post-ChannelMessage {
   Invoke-GraphRequest -Method POST -Uri $uri -Body $body
 }
 
+function Reply-ChannelMessage {
+  param([string]$TeamId,[string]$ChannelId,[string]$MessageId,[string]$Content)
+  $uri = "$(Get-Config 'Graph.BaseUrl')/teams/$TeamId/channels/$ChannelId/messages/$MessageId/replies"
+  $body = @{
+    body = @{
+      contentType = 'html'
+      content = $Content
+    }
+  }
+  Invoke-GraphRequest -Method POST -Uri $uri -Body $body
+}
+
+function Add-MessageReaction {
+  param([string]$TeamId,[string]$ChannelId,[string]$MessageId,[string]$ReactionType)
+  $uri = "$(Get-Config 'Graph.BaseUrl')/teams/$TeamId/channels/$ChannelId/messages/$MessageId/setReaction"
+  $body = @{
+    reactionType = $ReactionType
+  }
+  Invoke-GraphRequest -Method POST -Uri $uri -Body $body
+}
+
 function Get-TeamDrive {
   param([string]$TeamId)
   $uri = "$(Get-Config 'Graph.BaseUrl')/groups/$TeamId/drive"
@@ -290,4 +311,4 @@ function Upload-FileToChannel {
   return "$TargetFolder/$fileName"
 }
 
-Export-ModuleMember -Function Connect-Graph, Invoke-GraphRequest, Invoke-GraphBatchRequest, Find-AadUserByEmail, New-Team, New-TeamChannel, New-BatchedTeamChannels, Add-TeamMember, Add-BatchedTeamMembers, Post-ChannelMessage, Send-BatchedChannelMessages, Get-TeamDrive, Upload-FileToChannel
+Export-ModuleMember -Function Connect-Graph, Invoke-GraphRequest, Invoke-GraphBatchRequest, Find-AadUserByEmail, New-Team, New-TeamChannel, New-BatchedTeamChannels, Add-TeamMember, Add-BatchedTeamMembers, Post-ChannelMessage, Reply-ChannelMessage, Add-MessageReaction, Send-BatchedChannelMessages, Get-TeamDrive, Upload-FileToChannel

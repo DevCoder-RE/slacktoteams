@@ -37,9 +37,11 @@ Set-Location $scriptRoot
 . .\Shared\Shared-Graph.ps1
 . .\Shared\Shared-Slack.ps1
 . .\Shared\Shared-Parallel.ps1
+. .\Shared\Shared-Monitoring.ps1
 
 Initialize-Logging -LogDirectory "$scriptRoot\Logs"
 Load-AppConfig -AppSettingsPath "$scriptRoot\Config\appsettings.json" -EnvPath "$scriptRoot\Config\.env"
+Initialize-Monitoring
 Write-Log -Level Info -Message "Starting Run-All.ps1 with Mode=$Mode ExecutionMode=$ExecutionMode DryRun=$DryRun SkipProvision=$SkipProvision SkipFiles=$SkipFiles DeltaMode=$DeltaMode EmailNotifications=$EmailNotifications Rollback=$Rollback FullRollback=$FullRollback SelectiveRollback=$SelectiveRollback RealTimeSync=$RealTimeSync SyncIntervalMinutes=$SyncIntervalMinutes MaxRuntimeHours=$MaxRuntimeHours ContinuousMode=$ContinuousMode EnableParallel=$EnableParallel MaxConcurrentChannels=$MaxConcurrentChannels MaxConcurrentFiles=$MaxConcurrentFiles"
 
 # Notification function
@@ -53,6 +55,10 @@ function Send-Notification {
             Send-MailMessage -SmtpServer $smtpServer -From $from -To $to -Subject $Subject -Body $Body
             Write-Log -Level Info -Message "Email notification sent: $Subject"
         }
+    }
+    $webhookUrl = Get-Config 'Monitoring.WebhookUrl'
+    if ($webhookUrl) {
+        Send-WebhookNotification -Url $webhookUrl -Message "$Subject - $Body"
     }
 }
 
@@ -151,11 +157,15 @@ function Invoke-Phase {
     }
     Confirm-Phase $PhaseName
     try {
+        Update-PhaseProgress -PhaseName $PhaseName -Progress 0
         Write-Log -Level Info -Message "Starting $PhaseName"
         & $ScriptBlock
+        Complete-Phase -PhaseName $PhaseName
+        Update-PhaseProgress -PhaseName $PhaseName -Progress 100
         Write-Log -Level Info -Message "$PhaseName completed successfully"
         Send-Notification "Phase Completed: $PhaseName" "$PhaseName finished successfully at $(Get-Date)"
     } catch {
+        Record-Error
         Write-Log -Level Error -Message "$PhaseName failed: $_"
         Send-Notification "Phase Failed: $PhaseName" "$PhaseName failed: $_"
         if ($ExecutionMode -eq 'ConfirmOnError') {
@@ -268,5 +278,14 @@ Invoke-Phase "Phase9-ArchiveRun" {
     & .\Phases\Phase9-ArchiveRun.ps1 -Mode $Mode -DryRun:$DryRun
 }
 
+$Global:Metrics.EndTime = Get-Date
+$metrics = Get-MetricsSummary
+$workspaceId = Get-Config 'Monitoring.AzureMonitor.WorkspaceId'
+$sharedKey = Get-Config 'Monitoring.AzureMonitor.SharedKey'
+if ($workspaceId -and $sharedKey) {
+    Send-AzureMonitorMetric -WorkspaceId $workspaceId -SharedKey $sharedKey -MetricName "MigrationDuration" -Value $metrics.ElapsedTime.TotalSeconds
+    Send-AzureMonitorMetric -WorkspaceId $workspaceId -SharedKey $sharedKey -MetricName "TotalApiCalls" -Value $metrics.TotalApiCalls
+    Send-AzureMonitorMetric -WorkspaceId $workspaceId -SharedKey $sharedKey -MetricName "Errors" -Value $metrics.Errors
+}
 Write-Log -Level Info -Message "Run-All.ps1 completed."
 Send-Notification "Migration Completed" "All phases completed successfully at $(Get-Date)"

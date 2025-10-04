@@ -40,6 +40,17 @@ function Convert-SlackMarkdownToHtml {
   param([string]$Text, [hashtable]$EmojiMap)
   if (-not $Text) { return '' }
   $out = $Text
+  # Code blocks ```code``` -> <pre><code>
+  $out = [regex]::Replace($out, '```([^`]*)```', '<pre><code>$1</code></pre>', 'Multiline')
+  # Inline code `code` -> <code>
+  $out = $out -replace '`([^`]+)`','<code>$1</code>'
+  # Lists - item -> <li>
+  $out = [regex]::Replace($out, '(?m)^(\s*)- (.+)$', '$1<li>$2</li>')
+  # Numbered lists
+  $out = [regex]::Replace($out, '(?m)^(\s*)\d+\. (.+)$', '$1<li>$2</li>')
+  # Wrap consecutive <li> in <ul> or <ol>
+  # Simple wrap for bullets
+  $out = $out -replace '(?s)(<li>.*?</li>)+', '<ul>$&</ul>'
   # Mentions <@U123> -> @user (left as text; Teams mention API is complex)
   $out = $out -replace '<@([A-Z0-9]+)>','@user'
   # Channel refs <#C123|name> -> #name
