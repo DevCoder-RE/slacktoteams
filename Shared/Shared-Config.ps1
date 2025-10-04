@@ -71,4 +71,48 @@ function Set-Config {
   }
 }
 
-Export-ModuleMember -Function Load-AppConfig, Get-Config, Set-Config
+function Save-Checkpoint {
+  param(
+    [Parameter(Mandatory=$true)][string]$Phase,
+    [Parameter(Mandatory=$true)][hashtable]$State,
+    [string]$CheckpointDir = "Output\Checkpoints"
+  )
+  if (-not (Test-Path $CheckpointDir)) { New-Item -ItemType Directory -Path $CheckpointDir | Out-Null }
+  $checkpoint = @{
+    Phase = $Phase
+    Timestamp = (Get-Date).ToString('o')
+    State = $State
+  }
+  $path = Join-Path $CheckpointDir "$Phase-checkpoint.json"
+  Write-JsonFile -Path $path -Object $checkpoint
+  Write-Log -Level Info -Message "Checkpoint saved for phase $Phase" -Context "Checkpoint"
+}
+
+function Load-Checkpoint {
+  param(
+    [Parameter(Mandatory=$true)][string]$Phase,
+    [string]$CheckpointDir = "Output\Checkpoints"
+  )
+  $path = Join-Path $CheckpointDir "$Phase-checkpoint.json"
+  if (-not (Test-Path $path)) { return $null }
+  $checkpoint = Read-JsonFile -Path $path
+  Write-Log -Level Info -Message "Checkpoint loaded for phase $Phase from $($checkpoint.Timestamp)" -Context "Checkpoint"
+  return $checkpoint
+}
+
+function Resume-FromCheckpoint {
+  param(
+    [Parameter(Mandatory=$true)][string]$Phase,
+    [Parameter(Mandatory=$true)][scriptblock]$ResumeAction,
+    [string]$CheckpointDir = "Output\Checkpoints"
+  )
+  $checkpoint = Load-Checkpoint -Phase $Phase -CheckpointDir $CheckpointDir
+  if ($checkpoint) {
+    Write-Log -Level Info -Message "Resuming phase $Phase from checkpoint" -Context "Checkpoint"
+    & $ResumeAction $checkpoint.State
+  } else {
+    Write-Log -Level Info -Message "No checkpoint found for phase $Phase. Starting fresh." -Context "Checkpoint"
+  }
+}
+
+Export-ModuleMember -Function Load-AppConfig, Get-Config, Set-Config, Save-Checkpoint, Load-Checkpoint, Resume-FromCheckpoint

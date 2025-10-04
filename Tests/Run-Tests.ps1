@@ -107,4 +107,27 @@ try {
     Write-Log -Level Error -Message "Phase 7 test failed: $_" -Context "Test"
 }
 
+# Run performance tests
+Write-Log -Level Info -Message "Running performance tests" -Context "Test"
+try {
+    $perfResults = & "$PSScriptRoot\Performance-Tests.ps1"
+    Write-Log -Level Info -Message "Performance tests completed" -Context "Test"
+} catch {
+    Write-Log -Level Error -Message "Performance tests failed: $_" -Context "Test"
+}
+
+# Run unit tests (if Pester is available)
+Write-Log -Level Info -Message "Running unit tests" -Context "Test"
+try {
+    if (Get-Module -Name Pester -ListAvailable) {
+        Import-Module Pester
+        $testResults = Invoke-Pester -Script "$PSScriptRoot\Shared-Tests.ps1" -PassThru
+        Write-Log -Level Info -Message "Unit tests completed: $($testResults.PassedCount) passed, $($testResults.FailedCount) failed" -Context "Test"
+    } else {
+        Write-Log -Level Warn -Message "Pester not available, skipping unit tests" -Context "Test"
+    }
+} catch {
+    Write-Log -Level Error -Message "Unit tests failed: $_" -Context "Test"
+}
+
 Write-Log -Level Info -Message "Test suite completed" -Context "Test"

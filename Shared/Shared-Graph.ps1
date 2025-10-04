@@ -6,6 +6,13 @@ Set-StrictMode -Version Latest
 
 $Global:GraphToken = $null
 $Global:GraphTokenExpiry = Get-Date
+$Global:RateLimitState = @{
+  LastRequestTime = $null
+  RequestCount = 0
+  WindowStart = Get-Date
+  AdaptiveDelayMs = 1000
+  ConsecutiveErrors = 0
+}
 
 function Connect-Graph {
   param(
@@ -34,6 +41,46 @@ function Get-GraphAuthHeader {
   return @{ Authorization = "Bearer $Global:GraphToken" }
 }
 
+function Update-RateLimitState {
+  param([int]$StatusCode, [hashtable]$Headers)
+  $now = Get-Date
+  $Global:RateLimitState.LastRequestTime = $now
+
+  # Reset window if needed
+  if (($now - $Global:RateLimitState.WindowStart).TotalMinutes -ge 1) {
+    $Global:RateLimitState.WindowStart = $now
+    $Global:RateLimitState.RequestCount = 0
+  }
+
+  $Global:RateLimitState.RequestCount++
+
+  if ($StatusCode -eq 429) {
+    $Global:RateLimitState.ConsecutiveErrors++
+    $retryAfter = $Headers.'Retry-After' ?? '30'
+    $Global:RateLimitState.AdaptiveDelayMs = [math]::Max($Global:RateLimitState.AdaptiveDelayMs * 1.5, [int]$retryAfter * 1000)
+    Write-Log -Level Warn -Message "Rate limit hit. Adaptive delay increased to $($Global:RateLimitState.AdaptiveDelayMs)ms" -Context "RateLimit"
+  } elseif ($StatusCode -ge 200 -and $StatusCode -lt 300) {
+    $Global:RateLimitState.ConsecutiveErrors = 0
+    # Gradually reduce delay on success
+    $Global:RateLimitState.AdaptiveDelayMs = [math]::Max(1000, $Global:RateLimitState.AdaptiveDelayMs * 0.9)
+  }
+}
+
+function Get-RateLimitDelay {
+  $baseDelay = [int](Get-Config 'Graph.RateLimitPauseMs' 1000)
+  $adaptiveDelay = $Global:RateLimitState.AdaptiveDelayMs
+
+  # Calculate requests per minute
+  $requestsPerMinute = $Global:RateLimitState.RequestCount / [math]::Max(1, (Get-Date - $Global:RateLimitState.WindowStart).TotalMinutes)
+
+  # Increase delay if approaching limits
+  if ($requestsPerMinute -gt 100) { # Assuming 100 req/min limit
+    $adaptiveDelay = [math]::Min($adaptiveDelay * 2, 30000) # Max 30 seconds
+  }
+
+  return [math]::Max($baseDelay, $adaptiveDelay)
+}
+
 function Invoke-GraphRequest {
   param(
     [Parameter(Mandatory=$true)][string]$Method,
@@ -41,17 +88,130 @@ function Invoke-GraphRequest {
     [hashtable]$Headers,
     $Body
   )
+
+  # Rate limiting delay
+  $delay = Get-RateLimitDelay
+  if ($delay -gt 0) {
+    Start-Sleep -Milliseconds $delay
+  }
+
   $headers = Get-GraphAuthHeader
   if ($Headers) { $Headers.Keys | ForEach-Object { $headers[$_] = $Headers[$_] } }
+
   $sb = {
     param($Method, $Uri, $Headers, $Body)
-    if ($Body -and ($Method -in 'POST','PATCH','PUT')) {
-      Invoke-RestMethod -Method $Method -Uri $Uri -Headers $Headers -Body ($Body | ConvertTo-Json -Depth 50) -ContentType 'application/json'
-    } else {
-      Invoke-RestMethod -Method $Method -Uri $Uri -Headers $Headers
+    try {
+      $response = if ($Body -and ($Method -in 'POST','PATCH','PUT')) {
+        Invoke-WebRequest -Method $Method -Uri $Uri -Headers $Headers -Body ($Body | ConvertTo-Json -Depth 50) -ContentType 'application/json'
+      } else {
+        Invoke-WebRequest -Method $Method -Uri $Uri -Headers $Headers
+      }
+      Update-RateLimitState -StatusCode $response.StatusCode -Headers $response.Headers
+      return $response.Content | ConvertFrom-Json
+    } catch [System.Net.WebException] {
+      $webResponse = $_.Exception.Response
+      if ($webResponse) {
+        Update-RateLimitState -StatusCode [int]$webResponse.StatusCode -Headers $webResponse.Headers
+      }
+      throw
     }
   }
-  Invoke-WithRetry -ScriptBlock { & $sb $Method $Uri $headers $Body } -MaxAttempts 5 -InitialDelayMs (Get-Config 'Graph.RateLimitPauseMs' 2000) -Context "Graph:$Method $Uri"
+
+  Invoke-WithRetryPolicy -ScriptBlock { & $sb $Method $Uri $headers $Body } -OperationType 'api' -Context "Graph:$Method $Uri"
+}
+
+function Invoke-GraphBatchRequest {
+  param(
+    [Parameter(Mandatory=$true)][array]$Requests
+  )
+  $batchUri = "$(Get-Config 'Graph.BaseUrl')/\$batch"
+  $batchBody = @{
+    requests = $Requests
+  }
+  $headers = Get-GraphAuthHeader
+  $sb = {
+    param($BatchUri, $Headers, $BatchBody)
+    Invoke-RestMethod -Method POST -Uri $BatchUri -Headers $Headers -Body ($BatchBody | ConvertTo-Json -Depth 10) -ContentType 'application/json'
+  }
+  Invoke-WithRetry -ScriptBlock { & $sb $batchUri $headers $batchBody } -MaxAttempts 3 -InitialDelayMs (Get-Config 'Graph.RateLimitPauseMs' 2000) -Context "Graph:Batch"
+}
+
+function New-BatchedTeamChannels {
+  param(
+    [Parameter(Mandatory=$true)][string]$TeamId,
+    [Parameter(Mandatory=$true)][array]$ChannelNames,
+    [string]$MembershipType='standard'
+  )
+  $requests = @()
+  $id = 1
+  foreach ($channelName in $ChannelNames) {
+    $requests += @{
+      id = $id.ToString()
+      method = 'POST'
+      url = "/teams/$TeamId/channels"
+      headers = @{ 'Content-Type' = 'application/json' }
+      body = @{
+        displayName = $channelName
+        membershipType = $MembershipType
+      }
+    }
+    $id++
+  }
+  $batchResponse = Invoke-GraphBatchRequest -Requests $requests
+  return $batchResponse.responses
+}
+
+function Add-BatchedTeamMembers {
+  param(
+    [Parameter(Mandatory=$true)][string]$TeamId,
+    [Parameter(Mandatory=$true)][array]$UserIds,
+    [string]$Role='member'
+  )
+  $requests = @()
+  $id = 1
+  foreach ($userId in $UserIds) {
+    $requests += @{
+      id = $id.ToString()
+      method = 'POST'
+      url = "/teams/$TeamId/members"
+      headers = @{ 'Content-Type' = 'application/json' }
+      body = @{
+        '@odata.type' = '#microsoft.graph.aadUserConversationMember'
+        roles = @($Role)
+        'user@odata.bind' = "https://graph.microsoft.com/v1.0/users('$userId')"
+      }
+    }
+    $id++
+  }
+  $batchResponse = Invoke-GraphBatchRequest -Requests $requests
+  return $batchResponse.responses
+}
+
+function Send-BatchedChannelMessages {
+  param(
+    [Parameter(Mandatory=$true)][string]$TeamId,
+    [Parameter(Mandatory=$true)][string]$ChannelId,
+    [Parameter(Mandatory=$true)][array]$Messages
+  )
+  $requests = @()
+  $id = 1
+  foreach ($message in $Messages) {
+    $requests += @{
+      id = $id.ToString()
+      method = 'POST'
+      url = "/teams/$TeamId/channels/$ChannelId/messages"
+      headers = @{ 'Content-Type' = 'application/json' }
+      body = @{
+        body = @{
+          contentType = 'html'
+          content = $message.Content
+        }
+      }
+    }
+    $id++
+  }
+  $batchResponse = Invoke-GraphBatchRequest -Requests $requests
+  return $batchResponse.responses
 }
 
 function Find-AadUserByEmail {
@@ -130,4 +290,4 @@ function Upload-FileToChannel {
   return "$TargetFolder/$fileName"
 }
 
-Export-ModuleMember -Function Connect-Graph, Invoke-GraphRequest, Find-AadUserByEmail, New-Team, New-TeamChannel, Add-TeamMember, Post-ChannelMessage, Get-TeamDrive, Upload-FileToChannel
+Export-ModuleMember -Function Connect-Graph, Invoke-GraphRequest, Invoke-GraphBatchRequest, Find-AadUserByEmail, New-Team, New-TeamChannel, New-BatchedTeamChannels, Add-TeamMember, Add-BatchedTeamMembers, Post-ChannelMessage, Send-BatchedChannelMessages, Get-TeamDrive, Upload-FileToChannel

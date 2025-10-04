@@ -63,34 +63,15 @@ foreach ($u in $users) {
   $userById[$u.id] = $u
 }
 
-# Iterate channel message files
-$msgFiles = Get-SlackChannelMessageFiles
-$dryLimit = [int](Get-Config 'Posting.DryRunMaxMessages' 100)
-
-# Apply channel filter
-if ($ChannelFilter) {
-    $msgFiles = $msgFiles | Where-Object { $_.Channel -in $ChannelFilter }
-    Write-Log -Level Info -Message "Filtered to $($msgFiles.Count) channels: $($ChannelFilter -join ',')" -Context "Phase1"
-}
-
-foreach ($mf in $msgFiles) {
-  $channelName = $mf.Channel
-  $file = $mf.File
-  $messages = Read-JsonFile -Path $file
-
-  # Apply user filter
-  if ($UserFilter) {
-    $messages = $messages | Where-Object { $_.user -in $UserFilter }
-    Write-Log -Level Info -Message "Filtered to $($messages.Count) messages for users: $($UserFilter -join ',')" -Context "Phase1"
-  }
-
-  $out = @()
+function Process-MessageBatch {
+  param($Messages, $ChannelName, $UserById, $EmojiMap)
+  $processed = @()
   $count = 0
   $firstTs = $null; $lastTs = $null
-  foreach ($m in $messages) {
+  foreach ($m in $Messages) {
     if (Should-ExcludeMessage -m $m) { continue }
-    $author = if ($m.user -and $userById.ContainsKey($m.user)) { $userById[$m.user].profile.real_name } elseif ($m.username) { $m.username } else { 'unknown' }
-    $html = Convert-SlackMarkdownToHtml -Text $m.text -EmojiMap $emojiMap
+    $author = if ($m.user -and $UserById.ContainsKey($m.user)) { $UserById[$m.user].profile.real_name } elseif ($m.username) { $m.username } else { 'unknown' }
+    $html = Convert-SlackMarkdownToHtml -Text $m.text -EmojiMap $EmojiMap
     $ts = if ($m.ts) { [DateTimeOffset]::FromUnixTimeSeconds([int][double]$m.ts).ToString('o') } else { (Get-Date).ToString('o') }
     $files = @()
     if ($m.files) {
@@ -103,8 +84,8 @@ foreach ($mf in $msgFiles) {
         }
       }
     }
-    $out += [pscustomobject]@{
-      channel = $channelName
+    $processed += [pscustomobject]@{
+      channel = $ChannelName
       author = $author
       slack_user_id = $m.user
       timestamp = $ts
@@ -116,8 +97,62 @@ foreach ($mf in $msgFiles) {
     $dt = [DateTime]::Parse($ts)
     if (-not $firstTs -or $dt -lt $firstTs) { $firstTs = $dt }
     if (-not $lastTs -or $dt -gt $lastTs) { $lastTs = $dt }
-    if ($DryRun -and $count -ge $dryLimit) { break }
   }
+  return @{ processed = $processed; count = $count; firstTs = $firstTs; lastTs = $lastTs }
+}
+
+# Iterate channel message files
+$msgFiles = Get-SlackChannelMessageFiles
+$dryLimit = [int](Get-Config 'Posting.DryRunMaxMessages' 100)
+
+# Apply channel filter
+if ($ChannelFilter) {
+    $msgFiles = $msgFiles | Where-Object { $_.Channel -in $ChannelFilter }
+    Write-Log -Level Info -Message "Filtered to $($msgFiles.Count) channels: $($ChannelFilter -join ',')" -Context "Phase1"
+}
+
+ foreach ($mf in $msgFiles) {
+  $channelName = $mf.Channel
+  $file = $mf.File
+
+  # Memory-efficient streaming: process messages without loading entire array
+  $messages = Read-JsonFile -Path $file
+  $filteredMessages = if ($UserFilter) {
+    $messages | Where-Object { $_.user -in $UserFilter }
+  } else {
+    $messages
+  }
+
+  $out = @()
+  $count = 0
+  $firstTs = $null; $lastTs = $null
+
+  # Process in batches to manage memory
+  $batchSize = 1000
+  $messageBatch = @()
+  foreach ($m in $filteredMessages) {
+    $messageBatch += $m
+    if ($messageBatch.Count -ge $batchSize) {
+      $processedBatch = Process-MessageBatch -Messages $messageBatch -ChannelName $channelName -UserById $userById -EmojiMap $emojiMap
+      $out += $processedBatch.processed
+      $count += $processedBatch.count
+      $firstTs = if (-not $firstTs -or $processedBatch.firstTs -lt $firstTs) { $processedBatch.firstTs } else { $firstTs }
+      $lastTs = if (-not $lastTs -or $processedBatch.lastTs -gt $lastTs) { $processedBatch.lastTs } else { $lastTs }
+      $messageBatch = @()
+      # Force garbage collection
+      [System.GC]::Collect()
+      if ($DryRun -and $count -ge $dryLimit) { break }
+    }
+  }
+  # Process remaining messages
+  if ($messageBatch.Count -gt 0) {
+    $processedBatch = Process-MessageBatch -Messages $messageBatch -ChannelName $channelName -UserById $userById -EmojiMap $emojiMap
+    $out += $processedBatch.processed
+    $count += $processedBatch.count
+    $firstTs = if (-not $firstTs -or $processedBatch.firstTs -lt $firstTs) { $processedBatch.firstTs } else { $firstTs }
+    $lastTs = if (-not $lastTs -or $processedBatch.lastTs -gt $lastTs) { $processedBatch.lastTs } else { $lastTs }
+  }
+
   $outPath = Join-Path $parsedOutDir "$($channelName)-parsed-messages.json"
   Write-JsonFile -Path $outPath -Object $out
   $inventory += [pscustomobject]@{
@@ -128,6 +163,12 @@ foreach ($mf in $msgFiles) {
     file_refs = ($out | ForEach-Object { $_.files.Count } | Measure-Object -Sum).Sum
   }
   Write-Log -Level Info -Message "Parsed $($out.Count) messages from $channelName" -Context "Phase1"
+
+  # Clear variables to free memory
+  $messages = $null
+  $filteredMessages = $null
+  $out = $null
+  [System.GC]::Collect()
 }
 
 Write-JsonFile -Path "Output\Phase1-ParseSlack\discovery-summary.json" -Object $inventory

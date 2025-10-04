@@ -132,6 +132,100 @@ function Start-FileParallelProcessing {
     Write-Log -Level Info -Message "Parallel file processing completed" -Context "Parallel"
 }
 
+function Start-ParallelFileDownload {
+    param(
+        [Parameter(Mandatory)]
+        [array]$FileDownloads,
+        [int]$MaxConcurrentDownloads = 3,
+        [string]$Mode = 'Offline'
+    )
+
+    Write-Log -Level Info -Message "Starting parallel file downloads of $($FileDownloads.Count) files with max $MaxConcurrentDownloads concurrent" -Context "Parallel"
+
+    $downloadJobs = @()
+
+    foreach ($download in $FileDownloads) {
+        $downloadJobs += @{
+            Url = $download.UrlPrivate
+            Dest = $download.Dest
+            Mode = $Mode
+        }
+    }
+
+    # Process downloads in batches with rate limiting
+    for ($i = 0; $i -lt $downloadJobs.Count; $i += $MaxConcurrentDownloads) {
+        $batch = $downloadJobs[$i..([math]::Min($i + $MaxConcurrentDownloads - 1, $downloadJobs.Count - 1))]
+
+        Write-Log -Level Info -Message "Downloading batch of $($batch.Count) files" -Context "Parallel"
+
+        $batch | ForEach-Object -Parallel {
+            param($job)
+            try {
+                Write-Log -Level Info -Message "Downloading file to: $($job.Dest)" -Context "Parallel"
+                if ($job.Mode -eq 'Live') {
+                    Download-SlackFile -UrlPrivate $job.Url -OutFile $job.Dest
+                } else {
+                    if (Test-Path $job.Url) {
+                        Copy-Item $job.Url $job.Dest -Force
+                    }
+                }
+                Write-Log -Level Info -Message "Downloaded file: $($job.Dest)" -Context "Parallel"
+            } catch {
+                Write-Log -Level Error -Message "Failed to download file $($job.Dest): $_" -Context "Parallel"
+            }
+        } -ThrottleLimit $MaxConcurrentDownloads
+
+        # Rate limiting delay
+        Start-Sleep -Milliseconds 1000
+    }
+
+    Write-Log -Level Info -Message "Parallel file downloads completed" -Context "Parallel"
+}
+
+function Start-ParallelFileUpload {
+    param(
+        [Parameter(Mandatory)]
+        [array]$FileUploads,
+        [int]$MaxConcurrentUploads = 2
+    )
+
+    Write-Log -Level Info -Message "Starting parallel file uploads of $($FileUploads.Count) files with max $MaxConcurrentUploads concurrent" -Context "Parallel"
+
+    $uploadJobs = @()
+
+    foreach ($upload in $FileUploads) {
+        $uploadJobs += @{
+            TeamId = $upload.TeamId
+            ChannelId = $upload.ChannelId
+            FilePath = $upload.FilePath
+            FileName = $upload.FileName
+        }
+    }
+
+    # Process uploads in batches with rate limiting
+    for ($i = 0; $i -lt $uploadJobs.Count; $i += $MaxConcurrentUploads) {
+        $batch = $uploadJobs[$i..([math]::Min($i + $MaxConcurrentUploads - 1, $uploadJobs.Count - 1))]
+
+        Write-Log -Level Info -Message "Uploading batch of $($batch.Count) files" -Context "Parallel"
+
+        $batch | ForEach-Object -Parallel {
+            param($job)
+            try {
+                Write-Log -Level Info -Message "Uploading file: $($job.FileName)" -Context "Parallel"
+                Upload-FileToChannel -TeamId $job.TeamId -ChannelId $job.ChannelId -LocalPath $job.FilePath
+                Write-Log -Level Info -Message "Uploaded file: $($job.FileName)" -Context "Parallel"
+            } catch {
+                Write-Log -Level Error -Message "Failed to upload file $($job.FileName): $_" -Context "Parallel"
+            }
+        } -ThrottleLimit $MaxConcurrentUploads
+
+        # Rate limiting delay
+        Start-Sleep -Milliseconds 2000
+    }
+
+    Write-Log -Level Info -Message "Parallel file uploads completed" -Context "Parallel"
+}
+
 function Test-ParallelProcessingSupport {
     # Check if ForEach-Object -Parallel is available (PowerShell 7+)
     $parallelSupported = $PSVersionTable.PSVersion.Major -ge 7
@@ -144,4 +238,4 @@ function Test-ParallelProcessingSupport {
 }
 
 # Export functions
-Export-ModuleMember -Function Invoke-ParallelProcessing, Start-ChannelParallelProcessing, Start-FileParallelProcessing, Test-ParallelProcessingSupport
+Export-ModuleMember -Function Invoke-ParallelProcessing, Start-ChannelParallelProcessing, Start-FileParallelProcessing, Start-ParallelFileDownload, Start-ParallelFileUpload, Test-ParallelProcessingSupport

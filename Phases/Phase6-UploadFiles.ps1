@@ -11,6 +11,7 @@ param(
 . "$PSScriptRoot\..\Shared\Shared-Config.ps1"
 . "$PSScriptRoot\..\Shared\Shared-Json.ps1"
 . "$PSScriptRoot\..\Shared\Shared-Graph.ps1"
+. "$PSScriptRoot\..\Shared\Shared-Parallel.ps1"
 
 Write-Log -Level Info -Message "Phase6-UploadFiles started. Mode=$Mode ChannelFilter=$($ChannelFilter -join ',') DeltaMode=$DeltaMode DryRun=$DryRun" -Context "Phase6"
 
@@ -25,6 +26,8 @@ if ($ChannelFilter) {
     Write-Log -Level Info -Message "Filtered to $($provision.channels.Count) channels: $($ChannelFilter -join ',')" -Context "Phase6"
 }
 
+$allUploads = @()
+
 foreach ($chan in Get-ChildItem $downloadDir -Directory) {
     if ($ChannelFilter -and $chan.Name -notin $ChannelFilter) { continue }
     $target = $provision.channels | Where-Object { $_.slack_channel_name -eq $chan.Name }
@@ -34,18 +37,21 @@ foreach ($chan in Get-ChildItem $downloadDir -Directory) {
     }
 
     foreach ($file in Get-ChildItem $chan.FullName -File) {
-        if ($DryRun) {
-            Write-Log -Level Info -Message "DryRun: Would upload '$($file.Name)' to Teams channel '$($target.teams_channel_name)'" -Context "Phase6"
-        } else {
-            try {
-                Upload-FileToChannel -TeamId $provision.team.id -ChannelId $target.teams_channel_id -FilePath $file.FullName
-                Write-Log -Level Info -Message "Uploaded '$($file.Name)' to Teams channel '$($target.teams_channel_name)'" -Context "Phase6"
-            }
-            catch {
-                Write-Log -Level Error -Message "Failed to upload '$($file.Name)': $_" -Context "Phase6"
-            }
+        $allUploads += @{
+            TeamId = $provision.team.id
+            ChannelId = $target.teams_channel_id
+            FilePath = $file.FullName
+            FileName = $file.Name
+            ChannelName = $target.teams_channel_name
         }
     }
+}
+
+if ($DryRun) {
+    Write-Log -Level Info -Message "DryRun: Would upload $($allUploads.Count) files" -Context "Phase6"
+} else {
+    $maxConcurrent = [int](Get-Config 'Parallel.MaxConcurrentUploads' 2)
+    Start-ParallelFileUpload -FileUploads $allUploads -MaxConcurrentUploads $maxConcurrent
 }
 
 Write-Log -Level Info -Message "Phase6-UploadFiles completed." -Context "Phase6"
